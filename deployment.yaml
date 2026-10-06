@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-inference-deployment
+  labels:
+    app: ai-service
+spec:
+  replicas: 2 # MLOps focus: Ensures high availability by running 2 instances
+  selector:
+    matchLabels:
+      app: ai-service
+  template:
+    metadata:
+      labels:
+        app: ai-service
+    spec:
+      containers:
+        - name: ai-node-app
+          image: ai-inference-service:v2
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: "100m" # Requests 1/10th of a CPU core (makes it easy to trigger spikes)
+            limits:
+              cpu: "200m" # Caps it so a rogue script doesn't freeze your entire computer
+          env:
+            - name: AI_PROVIDER
+              value: "mock"
+            - name: OPENAI_API_KEY
+              value: ""
+            - name: ANTHROPIC_API_KEY
+              value: ""
+            - name: ANTHROPIC_MODEL
+              value: "claude-sonnet-5"
+          # MLOps focus: Kubernetes monitors if your AI model crashes or locks up
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-service-loadbalancer
+spec:
+  type: LoadBalancer # Balances traffic across your running AI pods
+  selector:
+    app: ai-service
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
