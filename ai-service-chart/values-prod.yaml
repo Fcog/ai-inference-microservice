@@ -1,0 +1,13 @@
+# Default values for our AI microservice
+replicaCount: 2
+
+image:
+  repository: fcog/ai-inference # Updated to your Docker Hub repo
+  tag: v1 # Updated to your specific tag
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: "1000m" # Reserves full CPU cores (or GPUs)
+  limits:
+    cpu: "2000m"

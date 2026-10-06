@@ -1,30 +1,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-inference-deployment
+  name: {{ .Release.Name }}-deployment
   labels:
     app: ai-service
 spec:
-  replicas: 2 # MLOps focus: Ensures high availability by running 2 instances
+  replicas: {{ .Values.replicaCount }} 
   selector:
     matchLabels:
-      app: ai-service
+      app: {{ .Release.Name }}-app
   template:
     metadata:
       labels:
-        app: ai-service
+        app: {{ .Release.Name }}-app
     spec:
       containers:
         - name: ai-node-app
-          image: ai-inference-service:v2
-          imagePullPolicy: Never
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 3000
           resources:
             requests:
-              cpu: "100m" # Requests 1/10th of a CPU core (makes it easy to trigger spikes)
+              cpu: "{{ .Values.resources.requests.cpu }}"
             limits:
-              cpu: "200m" # Caps it so a rogue script doesn't freeze your entire computer
+              cpu: "{{ .Values.resources.limits.cpu }}"
           env:
             - name: AI_PROVIDER
               value: "mock"
@@ -45,11 +45,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ai-service-loadbalancer
+  name: {{ .Release.Name }}-service-loadbalancer
 spec:
   type: LoadBalancer # Balances traffic across your running AI pods
   selector:
-    app: ai-service
+    app: {{ .Release.Name }}-app
   ports:
     - protocol: TCP
       port: 80
