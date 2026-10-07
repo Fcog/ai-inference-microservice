@@ -22,6 +22,45 @@ Providers:
 - **tsx** — watches and runs TypeScript during local development
 - **Docker** — multi-stage image on `node:20-alpine`: compile in a build stage, then ship production dependencies and `dist/` only
 - **Kubernetes** — a Deployment (two replicas, CPU requests and limits, liveness probe), a LoadBalancer Service, and a HorizontalPodAutoscaler that scales between 2 and 6 replicas on CPU
+- **Helm** - Kubernetes Package Manager
+
+## 🏗️ Architecture Overview
+
+The system architecture decouples configuration, secrets management, data caching, and compute workloads inside the cluster:
+
+```text
+[ User / cURL Traffic ]
+          │
+          ▼
+┌──────────────────┐
+│   K8s Service    │ (Automated Load Balancing across port 80/8080)
+└─────────┬────────┘
+          │
+          ├───► [ Pod: Node.js App (Replica 1) ] ───┐
+          │                                         │ Check Cache /
+          └───► [ Pod: Node.js App (Replica 2) ] ───┼─► [ Pod: Redis Standalone ]
+                                                    │   (0ms latency token save)
+                                                    │
+                                                    ▼ (Cache Miss Fallback)
+                                              [ LLM API Provider ]
+                                        (Hydrated securely by Vault)
+```
+
+1. **Traffic Control:** Inbound traffic hits a Kubernetes `LoadBalancer` Service, routing requests cleanly across multiple active application replicas.
+2. **Compute Engine:** The TypeScript pods parse input prompts, run health check monitoring endpoints (`/health`), and manage resource consumption thresholds.
+3. **Decoupled Secrets:** Application configurations are never hardcoded or stored in Git. On startup, pods bind variables dynamically from a native Kubernetes Secret which is automatically synchronized by the **External Secrets Operator** pulling from a local **HashiCorp Vault** instance.
+4. **Caching Layer:** Prompt strings are evaluated inside a localized, internal **Redis** infrastructure layer to eliminate redundant external AI provider executions, dropping inference compute costs and processing latency to zero.
+
+---
+
+## 🛠️ Prerequisites
+
+Ensure you have the following command-line utilities and runtime engines installed locally:
+
+- [Docker Desktop](https://docker.com) or [Rancher Desktop](https://rancherdesktop.io)
+- [Minikube](https://k8s.io) (Local Kubernetes engine)
+- [kubectl](https://kubernetes.io) (Kubernetes CLI executor)
+- [Helm](https://helm.sh) (Kubernetes Package Manager)
 
 ## Run locally
 

@@ -26,16 +26,28 @@ spec:
             limits:
               cpu: "{{ .Values.resources.limits.cpu }}"
           env:
-            - name: AI_PROVIDER
-              value: "mock"
-            - name: OPENAI_API_KEY
-              value: ""
-            - name: ANTHROPIC_API_KEY
-              value: ""
-            - name: ANTHROPIC_MODEL
-              value: "claude-sonnet-5"
-            - name: REDIS_URL
-              value: "redis://my-cache-redis-master:6379"
+          # --- FETCHING FROM VAULT SECRET GENERATOR ---
+          - name: AI_PROVIDER
+            valueFrom:
+              secretKeyRef:
+                name: ai-app-runtime-secrets # Matches target.name in Step 3
+                key: AI_PROVIDER          # Matches secretKey in Step 3          
+          - name: OPENAI_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: ai-app-runtime-secrets 
+                key: OPENAI_API_KEY 
+          - name: ANTHROPIC_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: ai-app-runtime-secrets 
+                key: ANTHROPIC_API_KEY 
+          - name: REDIS_URL
+            valueFrom:
+              secretKeyRef:
+                name: ai-app-runtime-secrets 
+                key: REDIS_URL                                 
+          # ---------------------------------------------
           # MLOps focus: Kubernetes monitors if your AI model crashes or locks up
           livenessProbe:
             httpGet:
