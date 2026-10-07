@@ -2,9 +2,17 @@
 
 A small HTTP service that turns a text prompt into a model completion. Callers send a prompt to a single endpoint and can choose which provider handles it. The service hides each provider behind one interface, so OpenAI, Claude, and a local mock all look the same to the API.
 
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `app/` | TypeScript service, Dockerfile, and local `.env` |
+| `ai-service-chart/` | Helm chart for the Deployment and Service |
+| `infrastructure/` | Vault and External Secrets setup |
+
 ## What it does
 
-`POST /predict` accepts a prompt and an optional provider name. An inference context picks the matching strategy and returns the completion, the provider name, and the model id.
+`POST /predict` accepts a prompt and an optional provider name. An inference context picks the matching strategy and returns the completion, the provider name, the model id, and where the answer came from.
 
 Providers:
 
@@ -12,67 +20,64 @@ Providers:
 - **claude** — message completion through the Anthropic API (`claude-sonnet-5` by default). `anthropic` is accepted as an alias
 - **mock** — a canned response that echoes the prompt, with no API key and no network call
 
-`GET /health` returns `{ "status": "healthy" }` for process and Kubernetes liveness checks.
+`source` is `model` when a provider produced the completion, and `cache` when Redis already had that provider, model, and prompt.
+
+`GET /health` returns `{ "status": "healthy" }` when the Node process can answer HTTP. Kubernetes uses it as the liveness probe. A down Redis cache does not fail this check.
 
 ## Technologies
 
 - **Node.js 20** and **TypeScript** — the service is written in TypeScript and compiled to CommonJS
 - **Express** — HTTP server and JSON body parsing
 - **OpenAI SDK** and **Anthropic SDK** — provider clients, created only when that strategy runs
+- **Redis** — caches predict completions
 - **tsx** — watches and runs TypeScript during local development
 - **Docker** — multi-stage image on `node:20-alpine`: compile in a build stage, then ship production dependencies and `dist/` only
-- **Kubernetes** — a Deployment (two replicas, CPU requests and limits, liveness probe), a LoadBalancer Service, and a HorizontalPodAutoscaler that scales between 2 and 6 replicas on CPU
-- **Helm** - Kubernetes Package Manager
+- **Helm** and **Kubernetes** — Deployment, LoadBalancer Service, CPU requests and limits, liveness probe
+- **Vault** and **External Secrets** — runtime environment variables for the cluster
 
-## 🏗️ Architecture Overview
-
-The system architecture decouples configuration, secrets management, data caching, and compute workloads inside the cluster:
+## Architecture
 
 ```text
-[ User / cURL Traffic ]
-          │
-          ▼
+[ User / cURL ]
+        │
+        ▼
 ┌──────────────────┐
-│   K8s Service    │ (Automated Load Balancing across port 80/8080)
+│   K8s Service    │
 └─────────┬────────┘
           │
-          ├───► [ Pod: Node.js App (Replica 1) ] ───┐
-          │                                         │ Check Cache /
-          └───► [ Pod: Node.js App (Replica 2) ] ───┼─► [ Pod: Redis Standalone ]
-                                                    │   (0ms latency token save)
-                                                    │
-                                                    ▼ (Cache Miss Fallback)
-                                              [ LLM API Provider ]
-                                        (Hydrated securely by Vault)
+          ▼
+┌──────────────────┐      cache hit / miss      ┌─────────┐
+│  Node.js pod     │ ─────────────────────────► │  Redis  │
+└─────────┬────────┘                             └─────────┘
+          │ cache miss
+          ▼
+   [ LLM provider ]
+
+Env vars come from a Kubernetes Secret synced from Vault.
 ```
 
-1. **Traffic Control:** Inbound traffic hits a Kubernetes `LoadBalancer` Service, routing requests cleanly across multiple active application replicas.
-2. **Compute Engine:** The TypeScript pods parse input prompts, run health check monitoring endpoints (`/health`), and manage resource consumption thresholds.
-3. **Decoupled Secrets:** Application configurations are never hardcoded or stored in Git. On startup, pods bind variables dynamically from a native Kubernetes Secret which is automatically synchronized by the **External Secrets Operator** pulling from a local **HashiCorp Vault** instance.
-4. **Caching Layer:** Prompt strings are evaluated inside a localized, internal **Redis** infrastructure layer to eliminate redundant external AI provider executions, dropping inference compute costs and processing latency to zero.
+1. A LoadBalancer Service sends traffic to the app pods on container port 3000.
+2. Each pod checks Redis before calling a provider. The cache key is the provider, model, and prompt.
+3. Pods read `AI_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `REDIS_URL` from the Secret `ai-app-runtime-secrets`. External Secrets fills that Secret from Vault.
 
----
+## Prerequisites
 
-## 🛠️ Prerequisites
-
-Ensure you have the following command-line utilities and runtime engines installed locally:
-
+- Node.js 20 or newer, for local runs
 - [Docker Desktop](https://docker.com) or [Rancher Desktop](https://rancherdesktop.io)
-- [Minikube](https://k8s.io) (Local Kubernetes engine)
-- [kubectl](https://kubernetes.io) (Kubernetes CLI executor)
-- [Helm](https://helm.sh) (Kubernetes Package Manager)
+- [Minikube](https://minikube.sigs.k8s.io/)
+- [kubectl](https://kubernetes.io)
+- [Helm](https://helm.sh)
 
 ## Run locally
 
-Requires Node.js 20 or newer.
-
 ```bash
+cd app
 cp .env.example .env
 npm install
 npm run dev
 ```
 
-The server listens on port 3000, or on `PORT` when that variable is set.
+The server listens on port 3000, or on `PORT` when that variable is set. `REDIS_URL` defaults to `redis://127.0.0.1:6379`. If Redis is down, predict still runs and responses are not cached.
 
 ```bash
 curl -s http://localhost:3000/predict \
@@ -84,127 +89,49 @@ curl -s http://localhost:3000/predict \
 {
   "result": "Mock response for: Hello",
   "provider": "mock",
-  "model": "mock"
+  "model": "mock",
+  "source": "model"
 }
 ```
 
-Set `AI_PROVIDER` to `mock`, `openai`, or `claude` to choose the default when a request omits `provider`. OpenAI and Claude need their API keys in `.env`. See `.env.example` for every variable.
+Set `AI_PROVIDER` to `mock`, `openai`, or `claude` to choose the default when a request omits `provider`. OpenAI and Claude need their API keys in `app/.env`.
 
-Other scripts: `npm run build` compiles to `dist/`, `npm start` runs the compiled app, and `npm run typecheck` checks types without emitting files.
+`npm run build` compiles to `app/dist/`, `npm start` runs the compiled app, and `npm run typecheck` checks types without emitting files.
 
-## Local Kubernetes AI Inference Service Setup
+## Deploy to Minikube
 
-This repository contains a containerized TypeScript/Node.js AI inference microservice orchestrated locally using Kubernetes, featuring Liveness Health Probes, High Availability Load Balancing, and Horizontal Pod Autoscaling (HPA).
+Install Vault, the External Secrets Operator, and Redis before the app release. See [infrastructure/README.md](infrastructure/README.md). Chart values and release commands are in [ai-service-chart/README.md](ai-service-chart/README.md).
 
-### 🚀 Prerequisites
-
-Ensure you have the following installed on your machine:
-• Docker Desktop or Rancher Desktop
-• Minikube
-• kubectl
-
-### 🛠️ Step 1: Initialize the Local Cluster
-
-Start Minikube and enable the Metrics Server addon. The Metrics Server is required to allow the Horizontal Pod Autoscaler (HPA) to read container CPU usage.
+Build and push from the repository root. The image context is `app/`:
 
 ```bash
-## Start the local Kubernetes cluster
-minikube start
-
-## Enable the metrics server (takes ~30-60 seconds to fully initialize)
-minikube addons enable metrics-server
-
-## Verify the cluster is up and nodes are responding
-kubectl get nodes
+docker build -t fcog/ai-inference:v1 ./app
+docker push fcog/ai-inference:v1
 ```
 
-### 📦 Step 2: Build and Tag the Container
-
-Whenever you make changes to the TypeScript application code, you must rebuild the Docker image with an updated version tag before deploying it to the cluster.
+Install or upgrade the dev release:
 
 ```bash
-## Build the Docker image (increment version tags v1, v2, etc., as needed)
-docker build -t your-docker-username/ai-inference-service:v1 .
-
-## (Optional) If using a remote registry:
-# docker push your-docker-username/ai-inference-service:v1
+helm upgrade --install my-ai-app-dev ./ai-service-chart -f ./ai-service-chart/values-dev.yaml
 ```
 
-Note: Ensure the image: string inside your deployment.yaml matches the exact tag you just built.
-
-### 🚀 Step 3: Deploy to Kubernetes
-
-Apply the declarative manifests to create the Deployment, LoadBalancer Service, and Horizontal Pod Autoscaler config.
+The chart names the Service `<release>-service-loadbalancer` and the Deployment `<release>-deployment`. For this release that is `my-ai-app-dev-service-loadbalancer` and `my-ai-app-dev-deployment`.
 
 ```bash
-# Apply the infrastructure deployment and service manifests
-kubectl apply -f deployment.yaml
-
-# Apply the Autoscaling (HPA) manifest
-kubectl apply -f hpa.yaml
+kubectl port-forward service/my-ai-app-dev-service-loadbalancer 8080:80
 ```
 
-### 🌐 Step 4: Network Routing & Testing
-
-Because Minikube runs inside a virtualized Docker environment, you must open a network tunnel to route local host traffic into the cluster.
-
-#### Option A: Port Forward Tunnel (Quick & Easy)
-
-Keep this command running in a dedicated terminal window:
-
 ```bash
-kubectl port-forward service/ai-service-loadbalancer 8080:80
-```
-
-#### Option B: Minikube Production Tunnel (Standard)
-
-Run this command in a separate terminal to emulate a cloud provider's external load balancer routing mesh:
-
-```bash
-minikube tunnel
-```
-
-#### Test the Endpoint
-
-Execute a test POST request against your running application via cURL:
-
-```bash
-curl -X POST http://localhost:8080/predict \
+curl -s -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Explain Kubernetes to a backend engineer in one sentence."}'
 ```
 
-(If you are using minikube tunnel, change the port from 8080 to 80)
-
-### 🔍 Validation & Chaos Engineering
-
-Use these operational commands to monitor cluster behavior, trace issues, or test system resiliency.
-
-#### Check Statuses & Monitor Logs
+Pushing a new image under the same tag does not change the Deployment spec. `values-dev.yaml` sets `pullPolicy: Always`, so a rollout creates a pod that pulls the tag again:
 
 ```bash
-# Watch pods spin up, terminate, or scale in real-time
-kubectl get pods -w
-
-# Check the live CPU utilization target status of the HPA
-kubectl get hpa ai-service-autoscaler -w
-
-# Stream runtime logs from a specific pod for debugging
-kubectl logs <pod-name> -f
+kubectl rollout restart deployment/my-ai-app-dev-deployment
+kubectl rollout status deployment/my-ai-app-dev-deployment
 ```
 
-#### Infrastructure Failure Test (Self-Healing)
-
-Delete an active pod while running your traffic loop to watch Kubernetes route traffic seamlessly to the remaining healthy node while instantly spawning a replacement:
-
-```bash
-kubectl delete pod <pod-name>
-```
-
-#### Force a Manual Rolling Restart
-
-If you need to force-flush your pods without modifying your configuration manifests:
-
-```bash
-kubectl rollout restart deployment/ai-inference-deployment
-```
+Environment variables are read when the container starts. After Vault or the synced Secret changes, restart the Deployment so the new pod picks them up.

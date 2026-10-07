@@ -1,106 +1,93 @@
-# 📦 AI Inference Application Service
+# AI Inference Application Service
 
-This directory contains the core application server logic. The application is built using **TypeScript** and **Node.js (Express)**, featuring a standard Kubernetes health monitor routing structure and an advanced **Redis caching interceptor** to drop LLM token expenditure and inference latency.
+This directory is the Node.js service. It contains the TypeScript source, the Dockerfile, and the local environment file.
 
----
+| Path | Role |
+| --- | --- |
+| `app.ts` | Express app: `GET /health` and `POST /predict` |
+| `inference/` | Provider strategies, the inference context, and the Redis cache adapter |
+| `Dockerfile` | Multi-stage image: compile TypeScript, then run `node dist/app.js` |
+| `.env.example` | Variables for a local `npm run dev` process |
 
-## 🧠 Core Engineering Logic
+## Request flow
 
-The application implements a standard gateway pattern for incoming AI requests:
+`POST /predict` resolves the provider, then asks Redis for a stored completion. A hit returns that completion with `source` set to `cache`. A miss calls the provider, stores the result, and returns it with `source` set to `model`.
 
-```text
-       [ POST /predict ]
-               │
-               ▼
-   ┌───────────────────────┐
-   │  Query Redis Cache    │
-   └───────────┬───────────┘
-               │
-       ┌───────┴───────┐
-       ▼               ▼
-  [Cache Hit]     [Cache Miss]
-   Instantly        Execute 500ms Mock LLM
-   Return 0ms       & Write to Redis
+The cache key is the provider name, the model id, and the prompt. `claude` and `anthropic` share one entry because `anthropic` is an alias. Entries expire after `REDIS_CACHE_TTL_SECONDS` (one hour by default).
+
+```json
+{
+  "result": "Mock response for: Hello",
+  "provider": "mock",
+  "model": "mock",
+  "source": "cache"
+}
 ```
 
-- **Health Checks (`GET /health`):** Essential for Kubernetes liveness probes. If the app locks up, crashes, or loses critical database connections, this endpoint returns a non-200 code, signaling Kubernetes to instantly destroy and recreate the failing pod.
-- **The Cache Layer (`POST /predict`):** Intercepts incoming prompts before hitting costly downstream API components.
-  - **Cache Miss:** If the prompt is unique, the system acts as a standard proxy to process the tokens, saves the string inside Redis with a **1-hour expiration Time-To-Live (TTL)**, and returns the response.
-  - **Cache Hit:** If an identical prompt is sent within the hour, the system pulls directly from the memory footprint of the cluster's Redis node, skipping downstream processing entirely.
+`GET /health` returns `{ "status": "healthy" }` when the process is up. It does not check Redis. The Helm chart uses this path as the liveness probe, so a cache outage must not restart the pod.
 
----
+If Redis is unreachable, predict still calls the provider and skips the cache.
 
-## ⚡ The Local Development Loop
+## Run locally
 
-To streamline local debugging without pushing images to Docker Hub constantly, you can build your TypeScript service directly into your local Kubernetes cluster's execution engine.
-
-### 1. Point Terminal to Minikube
+From this directory:
 
 ```bash
-# Instructs your computer's Docker CLI to talk directly to Minikube's Docker Engine
+cp .env.example .env
+npm install
+npm run dev
+```
+
+The process listens on port 3000. Point `REDIS_URL` at a Redis server, or leave the default `redis://127.0.0.1:6379`.
+
+```bash
+curl -s http://localhost:3000/predict \
+  -H 'content-type: application/json' \
+  -d '{"prompt": "What is Helm?", "provider": "mock"}'
+```
+
+Send the same body again. The second response has `"source": "cache"` when Redis stored the first one.
+
+`npm run build` writes `dist/`. `npm start` runs the compiled server. `npm run typecheck` checks types without emitting files.
+
+## Image
+
+Build from the repository root so the context is this directory:
+
+```bash
+docker build -t fcog/ai-inference:v1 ./app
+docker push fcog/ai-inference:v1
+```
+
+From inside `app/`, the same build is `docker build -t fcog/ai-inference:v1 .`.
+
+To build straight into Minikube's Docker engine instead of pushing to a registry:
+
+```bash
 eval $(minikube docker-env)
+docker build -t fcog/ai-inference:v1 .
 ```
 
-### 2. Build the Service Locally
+Set `image.pullPolicy` to `Never` or `IfNotPresent` in the Helm values when the image exists only inside Minikube. `Always` asks Docker Hub on every new pod.
+
+## Call the service in the cluster
+
+The Service name is the Helm release name plus `-service-loadbalancer`. For the dev release:
 
 ```bash
-# Compiles your code directly into the cluster's local image registry
-docker build -t ai-inference-service:local .
+kubectl port-forward service/my-ai-app-dev-service-loadbalancer 8080:80
 ```
-
-### 3. Deploy/Update Manifest
-
-Ensure your Helm setup or raw deployment files are instructed to use this local image without searching external registries:
-
-```yaml
-spec:
-  containers:
-    - name: node-app
-      image: ai-inference-service:local
-      imagePullPolicy: Never # Forces K8s to look only inside the local daemon
-```
-
----
-
-## 🛰️ Validating the Caching Infrastructure
-
-Once your service is running inside the cluster and your port-forward tunnel (`kubectl port-forward service/my-ai-app-service 8080:80`) is open, run these verification steps to test the cache mechanics.
-
-### Request 1: Trigger a Cache Miss
 
 ```bash
-curl -X POST http://localhost:8080/predict \
+curl -s -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "What is MLOps?"}'
+  -d '{"prompt": "What is Helm?"}'
 ```
 
-- **Result:** You will notice a slight `500ms` processing delay. The returned JSON structure will include:
-  ```json
-  { "source": "mock-llm", "result": "..." }
-  ```
-
-### Request 2: Trigger a Cache Hit
-
-Execute the exact same command immediately after:
+Logs for that release:
 
 ```bash
-curl -X POST http://localhost:8080/predict \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "What is MLOps?"}'
+kubectl logs -l app=my-ai-app-dev-app --tail=20 -f
 ```
 
-- **Result:** The payload will return **instantly (0ms response time)**. The returned JSON structure confirms the cache intercept:
-  ```json
-  { "source": "cache", "result": "..." }
-  ```
-
----
-
-## 📝 Diagnostic Logs Execution
-
-To visually witness the data flow logs handling cache transitions across your live cluster replicas:
-
-```bash
-# Stream the runtime application server logs
-kubectl logs -l app=my-ai-app --tail=20 -f
-```
+The pod label is `<release>-app`, which matches the Deployment selector in the chart.

@@ -1,79 +1,74 @@
-# ⛵ Helm Chart Configuration & Multi-Environment Packaging
+# Helm chart
 
-This directory contains the **Helm Chart** packaging layer for the AI inference microservice. Instead of maintaining static, duplicated Kubernetes YAML manifests, Helm acts as a template engine that bundles our infrastructure states into a single release package managed by a central configuration parameters file (`values.yaml`).
+This chart deploys the inference service: a Deployment, a LoadBalancer Service, a Vault SecretStore, and an ExternalSecret. `values-dev.yaml` and `values-prod.yaml` are two profiles for the same templates.
 
----
+Run Helm from the repository root.
 
-## 📈 Multi-Environment Staging Strategy
+## Profiles
 
-The chart utilizes separate value configuration profiles to seamlessly deploy the exact same core infrastructure templates into structurally isolated environments (**Development** vs. **Production**).
+| | Development (`values-dev.yaml`) | Production (`values-prod.yaml`) |
+| --- | --- | --- |
+| Replicas | 1 | 2 |
+| Image | `fcog/ai-inference:v1` | `fcog/ai-inference:v1` |
+| Pull policy | `Always` | `IfNotPresent` |
+| CPU request | `50m` | `1000m` |
+| CPU limit | `200m` | `2000m` |
 
-### Environment Profiles Overview
+`Always` pulls the tag whenever a pod is created. Replacing an image that keeps the same tag still needs a rollout restart, because Helm does not recreate pods when the rendered Deployment is unchanged.
 
-| Architectural Layer     | Development (`values-dev.yaml`)           | Production (`values-prod.yaml`)                              |
-| :---------------------- | :---------------------------------------- | :----------------------------------------------------------- |
-| **Instance Count**      | `replicaCount: 1` (Minimizes footprint)   | `replicaCount: 5` (High Availability / Traffic Spreading)    |
-| **Image Policy**        | `pullPolicy: Always` (Rapid tag tracking) | `pullPolicy: IfNotPresent` (Optimized start/hardlocked tags) |
-| **Resource Allocation** | `cpu: 50m` (Fractional low-cost share)    | `cpu: 1000m` (Dedicated CPU/GPU cores allocated)             |
-| **Autoscaling (HPA)**   | Disabled (Not required for manual tests)  | Enabled (`min: 2`, `max: 6` matching target thresholds)      |
+The chart does not include a HorizontalPodAutoscaler. `hpa.yaml` at the repository root targets an older Deployment name and is not applied by this chart.
 
----
-
-## 🚀 Execution & Staging Commands
-
-To install, switch, or upgrade your running instances across different environments, pass the targeted parameters profile using the `-f` deployment flag:
-
-### 1. Deploying to the Development Environment
+## Install and upgrade
 
 ```bash
-# Install or upgrade the Development release
-helm upgrade --install my-ai-dev ./ai-service-chart -f ./ai-service-chart/values-dev.yaml
+helm upgrade --install my-ai-app-dev ./ai-service-chart -f ./ai-service-chart/values-dev.yaml
 ```
 
-### 2. Deploying to the Production Environment
-
 ```bash
-# Install or upgrade the Production release
-helm upgrade --install my-ai-prod ./ai-service-chart -f ./ai-service-chart/values-prod.yaml
+helm upgrade --install my-ai-app-prod ./ai-service-chart -f ./ai-service-chart/values-prod.yaml
 ```
 
----
+Object names use the release name:
 
-## 🛠️ Helm Lifecycle Management Essentials
+| Object | Name |
+| --- | --- |
+| Deployment | `<release>-deployment` |
+| Service | `<release>-service-loadbalancer` |
+| Pod label | `app=<release>-app` |
 
-Use these operational commands to audit, control, and manipulate your packaged releases inside the cluster:
+For the dev release, port-forward with:
 
 ```bash
-# 1. Lint the chart folder to analyze template syntax formatting errors
+kubectl port-forward service/my-ai-app-dev-service-loadbalancer 8080:80
+```
+
+The Service listens on port 80 and sends traffic to container port 3000.
+
+## Useful commands
+
+```bash
 helm lint ./ai-service-chart
-
-# 2. View all active Helm applications currently tracking inside the cluster
 helm list
-
-# 3. Inspect the history of upgrades, version modifications, and deployments
-helm history my-ai-prod
-
-# 4. Roll back to a previous safe deployment revision if a production release fails
-# Syntax: helm rollback <release-name> <revision-number>
-helm rollback my-ai-prod 1
-
-# 5. Purge a running app release and cleanly delete all of its tracking K8s resources
-helm uninstall my-ai-dev
+helm history my-ai-app-dev
+helm rollback my-ai-app-dev 1
+helm uninstall my-ai-app-dev
 ```
 
----
+## What the templates read
 
-## 💡 How Template Parametrization Works Under the Hood
-
-Inside the `./templates/` folder, static strings are replaced by dynamic template variables. For instance, our deployment template configures its values via references like this:
+`templates/deployment.yaml` takes replicas, image, pull policy, and CPU from the values file:
 
 ```yaml
 spec:
-  replicas: { { .Values.replicaCount } }
-  containers:
-    - name: node-app
-      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-      imagePullPolicy: { { .Values.image.pullPolicy } }
+  replicas: {{ .Values.replicaCount }}
+  template:
+    spec:
+      containers:
+        - name: ai-node-app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
 ```
 
-When a deployment command is run, Helm instantly overrides these values with the values declared inside your selected environment file (`values-dev.yaml` or `values-prod.yaml`), outputting a fully validated manifest to the Kubernetes API.
+The container does not get those settings from a local `.env`. It reads `AI_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `REDIS_URL` from the Secret `ai-app-runtime-secrets`. `templates/external-secret.yaml` creates that Secret from the Vault path `secret/ai-service-credentials`. The store address is in `templates/secret-store.yaml`.
+
+Both External Secrets manifests use `apiVersion: external-secrets.io/v1`, which matches the operator installed on this cluster.
