@@ -23,7 +23,7 @@ export class ClaudeStrategy implements InferenceStrategy {
       .map((block) => block.text)
       .join('');
 
-    return { result, provider: this.name, model: this.model };
+    return { result, provider: this.name, model: this.model, source: 'model' };
   }
 
   private getClient(): Anthropic {

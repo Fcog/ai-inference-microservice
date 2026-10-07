@@ -2,6 +2,7 @@ import { ClaudeStrategy } from './claude-strategy';
 import { InferenceResult, InferenceStrategy, UnknownProviderError } from './inference-strategy';
 import { MockStrategy } from './mock-strategy';
 import { OpenAIStrategy } from './openai-strategy';
+import { ResponseCache } from './response-cache';
 
 export { UnknownProviderError };
 
@@ -19,6 +20,7 @@ export class InferenceContext {
     private readonly strategies: ReadonlyMap<string, InferenceStrategy>,
     private readonly aliases: ReadonlyMap<string, string>,
     private readonly defaultProvider: string,
+    private readonly cache?: ResponseCache,
   ) {}
 
   availableProviders(): string[] {
@@ -26,7 +28,15 @@ export class InferenceContext {
   }
 
   async complete(prompt: string, provider?: string): Promise<InferenceResult> {
-    return this.select(provider).complete(prompt);
+    const strategy = this.select(provider);
+    const cached = await this.readCache(strategy.name, strategy.model, prompt);
+    if (cached) {
+      return cached;
+    }
+
+    const result = await strategy.complete(prompt);
+    await this.writeCache(prompt, result);
+    return result;
   }
 
   private select(provider?: string): InferenceStrategy {
@@ -40,9 +50,35 @@ export class InferenceContext {
     }
     return strategy;
   }
+
+  private async readCache(provider: string, model: string, prompt: string): Promise<InferenceResult | undefined> {
+    if (!this.cache) {
+      return undefined;
+    }
+    try {
+      return await this.cache.get(provider, model, prompt);
+    } catch (error) {
+      console.error('Redis cache read failed:', error);
+      return undefined;
+    }
+  }
+
+  private async writeCache(prompt: string, result: InferenceResult): Promise<void> {
+    if (!this.cache) {
+      return;
+    }
+    try {
+      await this.cache.set(prompt, result);
+    } catch (error) {
+      console.error('Redis cache write failed:', error);
+    }
+  }
 }
 
-export function createInferenceContext(env: NodeJS.ProcessEnv = process.env): InferenceContext {
+export function createInferenceContext(
+  env: NodeJS.ProcessEnv = process.env,
+  cache?: ResponseCache,
+): InferenceContext {
   const strategies = new Map<string, InferenceStrategy>([
     ['mock', new MockStrategy()],
     ['openai', new OpenAIStrategy(env.OPENAI_API_KEY, env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL)],
@@ -63,7 +99,7 @@ export function createInferenceContext(env: NodeJS.ProcessEnv = process.env): In
     throw new Error(`AI_PROVIDER must be one of: ${[...strategies.keys()].join(', ')}`);
   }
 
-  return new InferenceContext(strategies, aliases, defaultProvider);
+  return new InferenceContext(strategies, aliases, defaultProvider, cache);
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {

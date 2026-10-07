@@ -34,6 +34,8 @@ spec:
               value: ""
             - name: ANTHROPIC_MODEL
               value: "claude-sonnet-5"
+            - name: REDIS_URL
+              value: "redis://my-cache-redis-master:6379"
           # MLOps focus: Kubernetes monitors if your AI model crashes or locks up
           livenessProbe:
             httpGet:

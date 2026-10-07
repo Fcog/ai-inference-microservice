@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { createInferenceContext, InferenceContext } from './inference/inference-context';
 import { UnknownProviderError } from './inference/inference-strategy';
+import { ResponseCache } from './inference/response-cache';
 
 export function createApp(inference: InferenceContext = createInferenceContext()): express.Express {
   const app = express();
@@ -36,5 +37,15 @@ export function createApp(inference: InferenceContext = createInferenceContext()
 
 if (require.main === module) {
   const port = Number(process.env.PORT ?? 3000);
-  createApp().listen(port, () => console.log(`AI Service running on port ${port}`));
+  const cache = ResponseCache.fromEnv();
+  cache
+    .connect()
+    .catch((error) => {
+      console.error('Redis cache unavailable, predict responses will not be cached:', error);
+    })
+    .finally(() => {
+      createApp(createInferenceContext(process.env, cache)).listen(port, () => {
+        console.log(`AI Service running on port ${port}`);
+      });
+    });
 }

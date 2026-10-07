@@ -10,6 +10,7 @@ export class MockStrategy implements InferenceStrategy {
       result: `Mock response for: ${prompt}`,
       provider: this.name,
       model: this.model,
+      source: 'model',
     };
   }
 }

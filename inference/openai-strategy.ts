@@ -21,7 +21,7 @@ export class OpenAIStrategy implements InferenceStrategy {
       throw new Error('OpenAI returned an empty completion');
     }
 
-    return { result, provider: this.name, model: this.model };
+    return { result, provider: this.name, model: this.model, source: 'model' };
   }
 
   private getClient(): OpenAI {

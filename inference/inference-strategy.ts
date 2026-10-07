@@ -1,7 +1,10 @@
+export type InferenceSource = 'cache' | 'model';
+
 export interface InferenceResult {
   result: string;
   provider: string;
   model: string;
+  source: InferenceSource;
 }
 
 /** Common contract every AI provider implements. */
