@@ -11,6 +11,10 @@ export function createApp(inference: InferenceContext = createInferenceContext()
     res.status(200).send({ status: 'healthy' });
   });
 
+  app.get('/version', (_req: Request, res: Response) => {
+    res.status(200).send({ version: process.env.GIT_SHA || 'unknown' });
+  });
+
   app.post('/predict', async (req: Request, res: Response) => {
     const { prompt, provider } = req.body ?? {};
     if (typeof prompt !== 'string' || prompt.trim() === '') {

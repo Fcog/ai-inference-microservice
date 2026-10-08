@@ -52,6 +52,8 @@ jobs:
           context: ./app
           file: ./app/Dockerfile
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             fcog/ai-inference:${{ github.sha }}
             fcog/ai-inference:latest

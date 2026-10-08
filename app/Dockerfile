@@ -9,7 +9,9 @@ RUN npm run build
 
 # Runtime stage: production deps and compiled output only
 FROM node:20-alpine
+ARG GIT_SHA=unknown
 ENV NODE_ENV=production
+ENV GIT_SHA=$GIT_SHA
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force

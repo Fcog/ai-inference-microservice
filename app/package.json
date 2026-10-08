@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/app.js",
     "dev": "tsx watch app.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --project tsconfig.test.json",
+    "test": "node --import tsx --test predict.test.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
