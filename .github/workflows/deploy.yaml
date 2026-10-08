@@ -1,0 +1,76 @@
+name: CI/CD AI Inference Service Pipeline
+
+# Trigger the workflow only when a PR is merged into the main branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 1. Check out the repository code from GitHub
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Node.js environment to run tests and compile TypeScript
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "./app/package-lock.json"
+
+      # 3. Install dependencies and run tests inside the /app directory
+      - name: Install & Test Application
+        run: |
+          cd app
+          npm ci
+          npm run test --if-present
+
+      # 4. Set up Docker Buildx (Allows advanced caching for faster builds)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 5. Authenticate with Docker Hub using secure repository secrets
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 6. Build the container image and push it to Docker Hub
+      # Tagging strategy: It tags the image with the unique GitHub Git Commit SHA
+      # and also updates the 'latest' tag for development.
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: |
+            fcog/ai-inference:${{ github.sha }}
+            fcog/ai-inference:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 7. GitOps automation
+      - name: Update Helm Chart Image Tag & Commit
+        run: |
+          # 1. Configure a generic Git identity for the runner
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+          # 2. Use 'sed' to target and replace the 'tag:' value inside your environment profiles
+          # This replaces lines matching 'tag: <anything>' with the new unique Git commit SHA
+          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./ai-service-chart/values-dev.yaml
+          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./ai-service-chart/values-prod.yaml
+
+          # 3. Stage the files, create a message, and push the automated commit directly back to main
+          git add ./ai-service-chart/values-dev.yaml ./ai-service-chart/values-prod.yaml
+          git commit -m "chore(gitops): automated image tag update to ${{ github.sha }} [skip ci]"
+          git push origin main
