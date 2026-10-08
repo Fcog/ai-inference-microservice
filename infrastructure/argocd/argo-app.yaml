@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-inference-service-prod
+  namespace: argocd # Argo CD monitors this resource from its own namespace
+spec:
+  project: default # Uses the default access control project
+
+  # 1. THE SOURCE: Where your code lives
+  source:
+    repoURL: "https://github.com/Fcog/ai-inference-microservice.git"
+    targetRevision: main # Watches the main branch
+    path: ai-service-chart # Path to your Helm chart folder inside the repo
+
+    # Helm specific configurations
+    helm:
+      valueFiles:
+        - values-prod.yaml # Tells Argo to deploy using your production configurations
+
+  # 2. THE DESTINATION: Where to deploy it
+  destination:
+    server: "https://kubernetes.default.svc" # API server of the cluster Argo CD is running in
+    namespace: default # Deploys the AI application into the default namespace
+
+  # 3. THE AUTOMATION LAYER (GitOps Sync Policy)
+  syncPolicy:
+    automated:
+      prune: true # Automatically deletes resources if you remove them from Git
+      selfHeal: true # If someone manually edits a pod via CLI, Argo automatically overwrites it to match Git!
+    syncOptions:
+      - CreateNamespace=true # Creates the target namespace if it doesn't exist

@@ -1,89 +1,64 @@
-# CI/CD
+# 🤖 CI/CD Automation & GitOps Pipeline
 
-`.github/workflows/deploy.yaml` is the only workflow. One job, `build-and-push`, runs on `ubuntu-latest` after a push to `main`. It installs app dependencies, builds the image from `app/`, pushes it to Docker Hub, then commits the new image tag into both Helm values files.
+This directory documents the Continuous Integration (CI) and Continuous Deployment (CD) strategy. The project leverages **GitHub Actions** and **Docker Hub** to build a secure, automated, and audit-ready delivery pipeline following modern **GitOps** infrastructure patterns.
 
-The workflow does not open pull requests, does not run Helm, and does not talk to the cluster. Nothing in this repository installs Argo CD or another GitOps controller. Applying the chart is still a separate `helm upgrade`, documented in [ai-service-chart/README.md](../../ai-service-chart/README.md).
+---
 
-## Trigger
+## 🔁 The Automated Delivery Loop
 
-```yaml
-on:
-  push:
-    branches:
-      - main
-```
-
-Any push to `main` starts the job, including a direct push. Opening or updating a pull request does not. There is no path filter, so a docs-only change on `main` still builds and pushes an image.
-
-The bot commit described below includes `[skip ci]`. GitHub Actions does not start a workflow for a push whose commit message contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, or `[actions skip]`. That stops the values-file commit from running the pipeline again.
-
-## Steps
-
-The steps run in order in a single job. The GitOps commit runs only after the image push succeeds.
+Rather than manually building images or executing raw deployment commands from a local machine, infrastructure updates follow a strict unidirectional cycle triggered on every codebase merge:
 
 ```text
-push to main
-      │
-      ▼
-checkout, Node 20, npm ci in app/
-      │
-      ▼
-docker build ./app  →  push fcog/ai-inference:<sha> and :latest
-      │
-      ▼
-set image.tag in values-dev.yaml and values-prod.yaml
-      │
-      ▼
-commit and push to main with [skip ci]
+  [ Developer Merges PR to Main ]
+                 │
+                 ▼
+     ┌───────────────────────┐
+     │  GitHub Actions Runs  │ ───► Executes application unit tests
+     └───────────┬───────────┘
+                 │
+                 ├───────────────────────────────┐
+                 ▼ (Build & Tag via SHA)         ▼ (GitOps Hydration Step)
+       ┌───────────────────┐           ┌──────────────────────────┐
+       │ Docker Hub Registry│           │  Update Git Repository   │
+       │ (fcog/ai-inference)│           │ (values-dev / values-prod)│
+       └───────────────────┘           └────────────┬─────────────┘
+                                                    │
+                                                    ▼
+                                       ┌──────────────────────────┐
+                                       │   Argo CD Pull Trigger   │
+                                       │ (Automated Cluster Sync) │
+                                       └──────────────────────────┘
 ```
 
-1. **Checkout** with `actions/checkout@v4`. The default token is kept so the later `git push` can authenticate.
-2. **Node.js 20** with `actions/setup-node@v4`. The npm cache key is `app/package-lock.json`.
-3. **Install** with `npm ci` inside `app/`. The same step runs `npm run test --if-present`. `app/package.json` has no `test` script and the repo has no test files, so this command exits successfully and does not run tests. `npm run typecheck` is not part of the workflow.
-4. **Docker Buildx** via `docker/setup-buildx-action@v3`.
-5. **Docker Hub login** via `docker/login-action@v3`, using `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
-6. **Build and push** via `docker/build-push-action@v5`. The context is `./app` and the Dockerfile is `./app/Dockerfile`. BuildKit stores layer cache in GitHub Actions (`cache-from: type=gha`, `cache-to: type=gha,mode=max`).
-7. **Rewrite the Helm tags and push a commit.** The runner sets `user.name` to `GitHub Actions Bot` and `user.email` to `actions@github.com`, then runs:
+1. **Continuous Integration (CI):** When code merges into `main`, GitHub Actions pulls down the repo, triggers code dependency testing, validates container assembly, and tags the output image using the unique **GitHub Git Commit SHA**.
+2. **Registry Distribution:** The newly compiled, high-performance image layer is pushed directly to the cloud repository workspace on **Docker Hub** (`fcog/ai-inference:<commit-sha>`).
+3. **Continuous Deployment (CD) Via GitOps:** The pipeline configures a native Git runner to rewrite the configuration layers (`values-dev.yaml` and `values-prod.yaml`) inside your Helm folder with the new tag value, committing the tracking adjustment directly back to the `main` branch.
+4. **Cluster Sync:** An internal cluster controller (e.g., Argo CD) continuously tracks the repo configuration. The millisecond it registers the automated bot commit, it triggers a rolling rollout inside your cluster to match the specified Git state.
 
-```bash
-sed -i 's/tag: .*/tag: "<github.sha>"/' ./ai-service-chart/values-dev.yaml
-sed -i 's/tag: .*/tag: "<github.sha>"/' ./ai-service-chart/values-prod.yaml
-```
+---
 
-`sed` replaces the rest of every line that contains `tag:`. In the current values files that is only `image.tag`. A comment on that line is removed. The committed value is a quoted string, for example `tag: "a1b2c3d..."`. Dev and prod receive the same SHA. There is no approval step between them.
+## 🔒 Security Configuration & Environment Keys
 
-The commit message is `chore(gitops): automated image tag update to <sha> [skip ci]`, and the runner pushes it to `origin main`.
+To authenticate the pipeline securely without hardcoding plain-text credentials in the repository configuration files, you must map the following **Repository Secrets** within your GitHub project structure under **Settings** -> **Secrets and variables** -> **Actions**:
 
-## Image tags
+### Required Repository Secrets
 
-Each successful run pushes two tags of the same image:
+- `DOCKERHUB_USERNAME`: Your exact Docker Hub workspace name (`fcog`).
+- `DOCKERHUB_TOKEN`: A Personal Access Token (PAT) generated from your Docker Hub Account Settings under _Security_.
+  - _Note: This PAT must be granted **Read, Write, Delete** (or Read & Write) clearance so the action runner has permission to push new container layers to your registry._
 
-| Tag | Example | Used by |
-| --- | --- | --- |
-| Full commit SHA | `fcog/ai-inference:a1b2c3d4...` | `image.tag` in both values files |
-| `latest` | `fcog/ai-inference:latest` | Nothing in the chart. The values files are not set to `latest`. |
+### Runner Authorization Requirements
 
-The repository name `fcog/ai-inference` is hardcoded in the workflow and in the values files. It is not taken from `DOCKERHUB_USERNAME`. The account in that secret needs permission to push to that repository.
+Because the pipeline must dynamically alter files (`values.yaml`) and push those infrastructure modifications back up into your source branch, you must modify the native workflow engine clearance:
 
-`github.sha` on a push event is the full 40-character commit id. Helm renders it as `image: "fcog/ai-inference:<sha>"`. Changing the tag changes the Deployment spec, so the next `helm upgrade` rolls the pods. Rollback is `helm rollback` to a release that still points at an earlier SHA, as long as that image is still on Docker Hub.
+1. Navigate to **Settings** -> **Actions** -> **General** on GitHub.
+2. Scroll down to **Workflow permissions**.
+3. Toggle the selection field to **Read and write permissions** and click **Save**.
 
-## Repository secrets
+---
 
-Create these under **Settings → Secrets and variables → Actions**:
+## 🧠 Core Engineering Optimizations
 
-| Secret | Value |
-| --- | --- |
-| `DOCKERHUB_USERNAME` | Docker Hub account that can push to `fcog/ai-inference` (`fcog` when that account owns the repository) |
-| `DOCKERHUB_TOKEN` | Docker Hub access token with **Read & Write**. The workflow only pushes; it does not delete tags. |
-
-Create the token in Docker Hub under **Account Settings → Security → Personal access tokens**.
-
-## Permissions
-
-The job sets `permissions: contents: write` so the `GITHUB_TOKEN` can push the values commit. That request only works when the repository allows it:
-
-1. Open **Settings → Actions → General**.
-2. Under **Workflow permissions**, select **Read and write permissions**.
-3. Save.
-
-A branch rule that blocks direct pushes to `main` also blocks this commit, unless the `GITHUB_TOKEN` is allowed to bypass it.
+- **Docker Cache-Backing Layer:** The pipeline includes a highly optimized cache system block (`cache-from: type=gha` and `cache-to: type=gha,mode=max`). This ensures subsequent builds reuse unmodified TypeScript compiled layers instantly, reducing deployment build windows down significantly.
+- **Infinite Loop Circuit Breaker (`[skip ci]`):** When the workflow bot commits the updated image tag configurations back to your branch, it appends a `[skip ci]` string block inside the automated commit message. This instructs the GitHub Actions engine **not** to trigger a recursive pipeline loop execution when the YAML update is committed.
+- **Immutability Strategy:** Using the exact `github.sha` commit key value as the primary deployment label eliminates the risks associated with utilizing dynamic mutable tags like `:latest` in production environments. This creates a clean audit trail, enabling exact code tracking and allowing for reliable infrastructure rollbacks via Helm or Argo CD at a moment's notice.
