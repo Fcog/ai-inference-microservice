@@ -7,17 +7,15 @@ on:
       - main
 
 jobs:
-  build-and-push:
+  test:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
-      # 1. Check out the repository code from GitHub
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Set up Node.js environment to run tests and compile TypeScript
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -25,60 +23,116 @@ jobs:
           cache: "npm"
           cache-dependency-path: "./services/ai-inference/app/package-lock.json"
 
-      # 3. Install dependencies and run tests inside the service directory
       - name: Install & Test Application
         run: |
           cd services/ai-inference/app
           npm ci
           npm run test --if-present
 
-      # 4. Emulate arm64 on the amd64 runner. Minikube on Apple Silicon pulls linux/arm64.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+  # Node under QEMU crashes with SIGILL (exit 132) during npm ci on emulated
+  # arm64. Build each platform on a runner of that architecture, then publish
+  # one manifest that contains both.
+  build:
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
-      # 5. Set up Docker Buildx (Allows advanced caching for faster builds)
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 6. Authenticate with Docker Hub using secure repository secrets
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 7. Build the container image and push it to Docker Hub
-      # Tagging strategy: It tags the image with the unique GitHub Git Commit SHA
-      # and also updates the 'latest' tag for development.
-      # Platforms: amd64 for GitHub-hosted runners, arm64 for this Apple Silicon cluster.
-      - name: Build and Push Docker Image
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./services/ai-inference/app
           file: ./services/ai-inference/app/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           build-args: |
             GIT_SHA=${{ github.sha }}
-          tags: |
-            fcog/ai-inference:${{ github.sha }}
-            fcog/ai-inference:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=image,name=fcog/ai-inference,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
-      # 8. GitOps automation
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push multi-platform manifest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t "fcog/ai-inference:${{ github.sha }}" \
+            -t fcog/ai-inference:latest \
+            $(printf 'fcog/ai-inference@sha256:%s ' *)
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Update Helm Chart Image Tag & Commit
         run: |
-          # 1. Configure a generic Git identity for the runner
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
 
-          # 2. Use 'sed' to target and replace the 'tag:' value inside your environment profiles
-          # This replaces lines matching 'tag: <anything>' with the new unique Git commit SHA
           sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./services/ai-inference/chart/values-dev.yaml
           sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./services/ai-inference/chart/values-prod.yaml
 
-          # 3. Stage the files, create a message, and push the automated commit directly back to main
           git add ./services/ai-inference/chart/values-dev.yaml ./services/ai-inference/chart/values-prod.yaml
           git commit -m "chore(gitops): automated image tag update to ${{ github.sha }} [skip ci]"
           git push origin main
