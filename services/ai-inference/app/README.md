@@ -55,11 +55,11 @@ Send the same body again. The second response has `"source": "cache"` when Redis
 Build from the repository root so the context is this directory:
 
 ```bash
-docker build -t fcog/ai-inference:v1 ./app
+docker build -t fcog/ai-inference:v1 ./services/ai-inference/app
 docker push fcog/ai-inference:v1
 ```
 
-From inside `app/`, the same build is `docker build -t fcog/ai-inference:v1 .`.
+From inside this directory, the same build is `docker build -t fcog/ai-inference:v1 .`.
 
 To build straight into Minikube's Docker engine instead of pushing to a registry:
 

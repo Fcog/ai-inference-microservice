@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: "https://github.com/Fcog/ai-inference-microservice.git"
     targetRevision: main # Watches the main branch
-    path: ai-service-chart # Path to your Helm chart folder inside the repo
+    path: services/ai-inference/chart # Path to your Helm chart folder inside the repo
 
     # Helm specific configurations
     helm:

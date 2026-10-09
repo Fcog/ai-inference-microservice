@@ -23,12 +23,12 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: "./app/package-lock.json"
+          cache-dependency-path: "./services/ai-inference/app/package-lock.json"
 
-      # 3. Install dependencies and run tests inside the /app directory
+      # 3. Install dependencies and run tests inside the service directory
       - name: Install & Test Application
         run: |
-          cd app
+          cd services/ai-inference/app
           npm ci
           npm run test --if-present
 
@@ -54,8 +54,8 @@ jobs:
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ./app
-          file: ./app/Dockerfile
+          context: ./services/ai-inference/app
+          file: ./services/ai-inference/app/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
@@ -75,10 +75,10 @@ jobs:
 
           # 2. Use 'sed' to target and replace the 'tag:' value inside your environment profiles
           # This replaces lines matching 'tag: <anything>' with the new unique Git commit SHA
-          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./ai-service-chart/values-dev.yaml
-          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./ai-service-chart/values-prod.yaml
+          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./services/ai-inference/chart/values-dev.yaml
+          sed -i 's/tag: .*/tag: "${{ github.sha }}"/' ./services/ai-inference/chart/values-prod.yaml
 
           # 3. Stage the files, create a message, and push the automated commit directly back to main
-          git add ./ai-service-chart/values-dev.yaml ./ai-service-chart/values-prod.yaml
+          git add ./services/ai-inference/chart/values-dev.yaml ./services/ai-inference/chart/values-prod.yaml
           git commit -m "chore(gitops): automated image tag update to ${{ github.sha }} [skip ci]"
           git push origin main

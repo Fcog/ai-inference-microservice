@@ -6,9 +6,11 @@ A small HTTP service that turns a text prompt into a model completion. Callers s
 
 | Path | What it is |
 | --- | --- |
-| `app/` | TypeScript service, Dockerfile, and local `.env` |
-| `ai-service-chart/` | Helm chart for the Deployment and Service |
-| `infrastructure/` | Vault and External Secrets setup |
+| `services/ai-inference/app/` | This service: TypeScript, Dockerfile, and local `.env` |
+| `services/ai-inference/chart/` | Helm chart for this service |
+| `infrastructure/` | Vault, External Secrets, and Argo CD. Shared by every service |
+
+A new microservice is another directory under `services/`, with its own `app/` and `chart/`, plus its own workflow and Argo CD Application. `infrastructure/` stays shared.
 
 ## What it does
 
@@ -71,7 +73,7 @@ Env vars come from a Kubernetes Secret synced from Vault.
 ## Run locally
 
 ```bash
-cd app
+cd services/ai-inference/app
 cp .env.example .env
 npm install
 npm run dev
@@ -94,25 +96,25 @@ curl -s http://localhost:3000/predict \
 }
 ```
 
-Set `AI_PROVIDER` to `mock`, `openai`, or `claude` to choose the default when a request omits `provider`. OpenAI and Claude need their API keys in `app/.env`.
+Set `AI_PROVIDER` to `mock`, `openai`, or `claude` to choose the default when a request omits `provider`. OpenAI and Claude need their API keys in `services/ai-inference/app/.env`.
 
-`npm run build` compiles to `app/dist/`, `npm start` runs the compiled app, and `npm run typecheck` checks types without emitting files.
+`npm run build` compiles to `services/ai-inference/app/dist/`, `npm start` runs the compiled app, and `npm run typecheck` checks types without emitting files.
 
 ## Deploy to Minikube
 
-Install Vault, the External Secrets Operator, and Redis before the app release. See [infrastructure/README.md](infrastructure/README.md). Chart values and release commands are in [ai-service-chart/README.md](ai-service-chart/README.md).
+Install Vault, the External Secrets Operator, and Redis before the app release. See [infrastructure/README.md](infrastructure/README.md). Chart values and release commands are in [services/ai-inference/chart/README.md](services/ai-inference/chart/README.md).
 
-Build and push from the repository root. The image context is `app/`:
+Build and push from the repository root. The image context is `services/ai-inference/app/`:
 
 ```bash
-docker build -t fcog/ai-inference:v1 ./app
+docker build -t fcog/ai-inference:v1 ./services/ai-inference/app
 docker push fcog/ai-inference:v1
 ```
 
 Install or upgrade the dev release:
 
 ```bash
-helm upgrade --install my-ai-app-dev ./ai-service-chart -f ./ai-service-chart/values-dev.yaml
+helm upgrade --install my-ai-app-dev ./services/ai-inference/chart -f ./services/ai-inference/chart/values-dev.yaml
 ```
 
 The chart names the Service `<release>-service-loadbalancer` and the Deployment `<release>-deployment`. For this release that is `my-ai-app-dev-service-loadbalancer` and `my-ai-app-dev-deployment`.

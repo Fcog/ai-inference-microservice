@@ -1,6 +1,6 @@
 # Vault and External Secrets
 
-Runtime configuration for the cluster does not come from Git or from `app/.env`. HashiCorp Vault stores the values. The External Secrets Operator copies them into the Kubernetes Secret `ai-app-runtime-secrets`. The Deployment reads that Secret into the process environment when a container starts.
+Runtime configuration for the cluster does not come from Git or from `services/ai-inference/app/.env`. HashiCorp Vault stores the values. The External Secrets Operator copies them into the Kubernetes Secret `ai-app-runtime-secrets`. The Deployment reads that Secret into the process environment when a container starts.
 
 ```text
 Vault  secret/ai-service-credentials
@@ -48,7 +48,7 @@ Dev mode serves the API over HTTP. From any namespace the Service is:
 http://vault.vault.svc.cluster.local:8200
 ```
 
-That value is `server` in `ai-service-chart/templates/secret-store.yaml`. Port 8200 is the API. Port 8201 on the same Service is Vault's cluster port.
+That value is `server` in `services/ai-inference/chart/templates/secret-store.yaml`. Port 8200 is the API. Port 8201 on the same Service is Vault's cluster port.
 
 Give the operator the dev root token. The SecretStore reads the key `token` from a Secret named `vault-token` in the app namespace:
 
@@ -74,8 +74,8 @@ kubectl exec -it vault-0 -n vault -- /bin/sh
 vault login root
 vault kv put secret/ai-service-credentials \
   AI_PROVIDER="claude" \
-  OPENAI_API_KEY="<value from app/.env>" \
-  ANTHROPIC_API_KEY="<value from app/.env>" \
+  OPENAI_API_KEY="<value from services/ai-inference/app/.env>" \
+  ANTHROPIC_API_KEY="<value from services/ai-inference/app/.env>" \
   REDIS_URL="redis://my-cache-redis-master:6379"
 exit
 ```
