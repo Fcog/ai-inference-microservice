@@ -21,11 +21,11 @@ The chart does not include a HorizontalPodAutoscaler. `hpa.yaml` at the reposito
 ## Install and upgrade
 
 ```bash
-helm upgrade --install my-ai-app-dev ./ai-service-chart -f ./ai-service-chart/values-dev.yaml
+helm upgrade --install my-ai-app-dev ./services/ai-inference/chart -f ./services/ai-inference/chart/values-dev.yaml
 ```
 
 ```bash
-helm upgrade --install my-ai-app-prod ./ai-service-chart -f ./ai-service-chart/values-prod.yaml
+helm upgrade --install my-ai-app-prod ./services/ai-inference/chart -f ./services/ai-inference/chart/values-prod.yaml
 ```
 
 Object names use the release name:
@@ -47,7 +47,7 @@ The Service listens on port 80 and sends traffic to container port 3000.
 ## Useful commands
 
 ```bash
-helm lint ./ai-service-chart
+helm lint ./services/ai-inference/chart
 helm list
 helm history my-ai-app-dev
 helm rollback my-ai-app-dev 1
