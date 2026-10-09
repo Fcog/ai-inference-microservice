@@ -3,7 +3,7 @@ replicaCount: 2
 
 image:
   repository: fcog/ai-inference # Updated to your Docker Hub repo
-  tag: "75ee6a8ab578e12f0bdcdd669e3c3f46de73d7aa"
+  tag: "aadce0247ed5ee73ea1c46f24a4e7c11278962a1"
   pullPolicy: IfNotPresent
 
 resources:
