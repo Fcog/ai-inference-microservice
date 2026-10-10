@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-processor-service
+spec:
+  type: ClusterIP # 🔒 Private within the cluster network
+  selector:
+    app: {{ .Release.Name }}-processor
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 4000
