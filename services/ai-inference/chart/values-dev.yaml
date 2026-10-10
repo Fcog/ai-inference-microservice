@@ -2,7 +2,7 @@ replicaCount: 1 # Only need 1 pod for testing
 
 image:
   repository: fcog/ai-inference
-  tag: "aadce0247ed5ee73ea1c46f24a4e7c11278962a1"
+  tag: "fbf1e23373080107710ed7def00344c35463cfe4"
   pullPolicy: Always
 
 resources:
